@@ -1,0 +1,141 @@
+clc; clear all; close all;
+
+%% Parameters
+Nsym   = 5e4;
+SNR_dB = 0:2:20;
+SNR    = 10.^(SNR_dB/10);
+numUsers = 3;
+
+%% Power Allocation (Far=User1 gets highest power)
+P = [0.7; 0.2; 0.1];
+
+%% BER Storage
+BER_rayleigh = zeros(numUsers, length(SNR));
+BER_rician   = zeros(numUsers, length(SNR));
+BER_nakagami = zeros(numUsers, length(SNR));
+
+%% Channel Parameters
+K_rice  = 5;
+m_param = [1 2 3];  % Nakagami m per user (m=1 ≈ Rayleigh)
+omega   = 1;
+
+for i = 1:length(SNR)
+    %% Data Generation
+    b1 = randi([0 1],  1, Nsym);   % User1: BPSK
+    b2 = randi([0 3],  1, Nsym);   % User2: QPSK
+    b3 = randi([0 15], 1, Nsym);   % User3: 16-QAM
+
+    x1 = 2*b1 - 1;                                      % BPSK symbols
+    x2 = pskmod(b2, 4, pi/4);                           % QPSK symbols
+    x3 = qammod(b3, 16, 'UnitAveragePower', true);      % 16-QAM symbols
+
+    %% NOMA Superposition
+    tx = sqrt(P(1))*x1 + sqrt(P(2))*x2 + sqrt(P(3))*x3;
+
+    %% Channel Generation
+    % Rayleigh
+    h_ray = (randn(numUsers,Nsym) + 1i*randn(numUsers,Nsym)) / sqrt(2);
+
+    % Rician
+    h_ric = sqrt(K_rice/(K_rice+1)) + ...
+            sqrt(1/(K_rice+1)) * (randn(numUsers,Nsym)+1i*randn(numUsers,Nsym))/sqrt(2);
+
+    % Nakagami-m (real-valued envelope)
+    h_nak = zeros(numUsers, Nsym);
+    for u = 1:numUsers
+        envelope = sqrt(gamrnd(m_param(u), omega/m_param(u), [1 Nsym]));
+        phase    = exp(1i * 2*pi*rand(1,Nsym));   % random phase
+        h_nak(u,:) = envelope .* phase;
+    end
+
+    %% Loop over channels
+    for ch = 1:3
+        switch ch
+            case 1, h = h_ray;
+            case 2, h = h_ric;
+            case 3, h = h_nak;
+        end
+
+        %% AWGN Noise (complex)
+        noise_power = 1/(2*SNR(i));
+        noise = sqrt(noise_power) * (randn(numUsers,Nsym)+1i*randn(numUsers,Nsym));
+
+        %% Received Signal & Equalization
+        rx = h .* tx + noise;
+        y  = rx ./ h;   % Perfect CSI equalization → y ≈ tx + noise/h
+
+        %% ---- USER 1 (Far user, BPSK) ----
+        y1      = y(1,:);
+        b1_hat  = real(y1) > 0;   % BPSK threshold (P1 absorbed in tx)
+
+        %% ---- USER 2 (QPSK) SIC ----
+        y2 = y(2,:);
+        % SIC Step 1: Detect & cancel User1
+        x1_hat_u2  = 2*(real(y2) > 0) - 1;          % re-detect User1 from y2
+        y2_sic     = y2 - sqrt(P(1))*x1_hat_u2;     % cancel User1
+        % Detect User2
+        b2_hat = pskdemod(y2_sic, 4, pi/4);         % y2_sic contains sqrt(P2)*x2 + ...
+
+        %% ---- USER 3 (16-QAM) SIC ----
+        y3 = y(3,:);
+        % SIC Step 1: Cancel User1
+        x1_hat_u3  = 2*(real(y3) > 0) - 1;
+        y3_sic1    = y3 - sqrt(P(1))*x1_hat_u3;
+        % SIC Step 2: Cancel User2
+        b2_hat_u3  = pskdemod(y3_sic1, 4, pi/4);
+        x2_hat_u3  = pskmod(b2_hat_u3, 4, pi/4);
+        y3_sic2    = y3_sic1 - sqrt(P(2))*x2_hat_u3;
+        % Detect User3
+        b3_hat = qamdemod(y3_sic2, 16, 'UnitAveragePower', true);
+
+        %% BER Calculation
+        BER1 = mean(b1 ~= b1_hat);
+        BER2 = mean(b2 ~= b2_hat);
+        BER3 = mean(b3 ~= b3_hat);
+
+        switch ch
+            case 1, BER_rayleigh(:,i) = [BER1; BER2; BER3];
+            case 2, BER_rician(:,i)   = [BER1; BER2; BER3];
+            case 3, BER_nakagami(:,i) = [BER1; BER2; BER3];
+        end
+    end
+end
+
+%% ====================== PLOTS ======================
+
+%% Figure 1: Channel Comparison - User 1 (BPSK)
+figure;
+semilogy(SNR_dB, BER_rayleigh(1,:), '-o', 'LineWidth', 2, 'Color', 'b'); hold on;
+semilogy(SNR_dB, BER_rician(1,:),   '-s', 'LineWidth', 2, 'Color', 'r');
+semilogy(SNR_dB, BER_nakagami(1,:), '-^', 'LineWidth', 2, 'Color', [0.85 0.65 0]);
+grid on; legend('Rayleigh','Rician (K=5)','Nakagami (m=1)');
+xlabel('SNR (dB)'); ylabel('BER');
+title('Channel Comparison - User 1 (BPSK, Far User)');
+
+%% Figure 2: Multi-User BER (Rayleigh)
+figure;
+semilogy(SNR_dB, BER_rayleigh(1,:), '-o', 'LineWidth', 2); hold on;
+semilogy(SNR_dB, BER_rayleigh(2,:), '-s', 'LineWidth', 2);
+semilogy(SNR_dB, BER_rayleigh(3,:), '-^', 'LineWidth', 2);
+grid on; legend('User1 (BPSK)','User2 (QPSK)','User3 (16-QAM)');
+xlabel('SNR (dB)'); ylabel('BER');
+title('Multi-User BER - NOMA with SIC (Rayleigh)');
+
+%% Figure 3: All Channels - All Users
+figure;
+colors = lines(numUsers);
+ch_names = {'Rayleigh','Rician','Nakagami'};
+markers  = {'-o','-s','-^'};
+BER_all  = {BER_rayleigh, BER_rician, BER_nakagami};
+for u = 1:numUsers
+    for ch = 1:3
+        semilogy(SNR_dB, BER_all{ch}(u,:), markers{ch}, ...
+            'LineWidth', 1.5, 'Color', colors(u,:)); hold on;
+    end
+end
+grid on;
+xlabel('SNR (dB)'); ylabel('BER');
+title('All Users × All Channels');
+legend('U1-Rayleigh','U1-Rician','U1-Nakagami',...
+       'U2-Rayleigh','U2-Rician','U2-Nakagami',...
+       'U3-Rayleigh','U3-Rician','U3-Nakagami','Location','southwest');
