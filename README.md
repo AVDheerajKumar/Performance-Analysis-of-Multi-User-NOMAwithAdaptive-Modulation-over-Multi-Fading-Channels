@@ -1,0 +1,2 @@
+# Performance-Analysis-of-Multi-User-NOMAwithAdaptive-Modulation-over-Multi-Fading-Channels
+A MATLAB-based simulation of a Multi-User NOMA-OFDM system with adaptive modulation, dynamic power allocation, and Successive Interference Cancellation (SIC). The project evaluates BER performance over Rayleigh, Rician, and Nakagami fading channels to improve spectral efficiency, fairness, and communication reliability.
